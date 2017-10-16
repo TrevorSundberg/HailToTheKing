@@ -18,15 +18,6 @@ class LobbyLogic : ZilchComponent
   
   function OnKeyDown(event : KeyboardEvent)
   {
-    // Lobby keyboard shortcuts
-    if(event.Key == Keys.Enter)
-    {
-      this.GameSession.GameSetup.HostNow();
-    }
-    else if(event.Key == Keys.Space)
-    {
-      this.GameSession.GameSetup.DiscoverAndJoinLater();
-    }
   }
   
   function OnHostButtonLeftClick(event : ViewportMouseEvent)

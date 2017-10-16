@@ -1,6 +1,8 @@
 class Player : ZilchComponent
 {
   [Dependency]
+  var Transform : Transform;
+  [Dependency]
   var RigidBody : RigidBody;
   [Dependency]
   var NetUser : NetUser;
@@ -23,15 +25,30 @@ class Player : ZilchComponent
   [NetProperty(netChannelConfig : "ClientAuthority")]
   var InputRight : Boolean;
   
+  var LastInputUp : Boolean;
+  var LastInputDown : Boolean;
+  var LastInputLeft : Boolean;
+  var LastInputRight : Boolean;
+  
+  var SwordAction : Action;
+  
   // Player movement force scalar.
-  [Property]
-  var Server_MovementScalar : Real = 8;
+  var Server_MovementScalar : Real = 7;
+  var Server_WallMovementScalar : Real = 16;
+  var Server_SwordTime : Real = 0.2;
+  
+  [ShaderInput]
+  var AlbedoValue : Real4 = Colors.Red;
   
   function Initialize(init : CogInitializer)
   {
+    this.AlbedoValue = Real4(Math.Abs(Random(this.NetUser.NetUserId).UnitReal3()), 1);
+    
     // If we're the server, we're responsible for processing the player's inputs set by the owning client.
     if(this.NetUser.IsServer)
     {
+      var rand = this.LevelSettings.RandomContext;
+      this.Transform.WorldTranslation = Real3(rand.Range(-9, 9), rand.Range(-9, 9), 0);
       Zero.Connect(this.Space, Events.LogicUpdate, this.Server_OnLogicUpdate);
       Zero.Connect(this.Owner, Events.NetChannelIncomingPropertyChanged, this.Server_OnNetChannelIncomingPropertyChanged);
     }
@@ -79,30 +96,75 @@ class Player : ZilchComponent
   // Server-Side Update Events
   //
   
+  var IsSwordSwinging : Boolean
+  {
+    get { return this.SwordAction != null && !this.SwordAction.Completed; }
+  }
+  
   function Server_OnLogicUpdate(event : UpdateEvent)
   {
+    if (this.IsSwordSwinging)
+      return;
+    
     // Compute the player movement vector based on the client's input.
-    var movement = Real3(0, 0, 0);
+    var movement = Real3.Zero;
+    
     
     // (These input property values are replicated to us from the owning client whenever their state changes.
     // We are still authoritative over the player's other properties, such as Translation and Rotation,
     // so clients are unable to cheat by trying to set their own position / orientation.)
-    if(this.InputUp)
-      movement -= Real3.ZAxis;
-    if(this.InputDown)
-      movement += Real3.ZAxis;
-    if(this.InputLeft)
-      movement -= Real3.XAxis;
-    if(this.InputRight)
-      movement += Real3.XAxis;
+    if(this.InputUp && !this.LastInputUp)
+      movement = +Real3.YAxis;
+    if(this.InputDown && !this.LastInputDown)
+      movement = -Real3.YAxis;
+    if(this.InputRight && !this.LastInputRight)
+      movement = +Real3.XAxis;
+    if(this.InputLeft && !this.LastInputLeft)
+      movement = -Real3.XAxis;
     
-    // Normalize the movement vector (so player's can't move faster diagonally)
-    // and scale it by our movement scalar so our player's go as fast we want them to.
-    movement = Math.Normalize(movement);
-    movement *= this.Server_MovementScalar;
+    this.LastInputUp = this.InputUp;
+    this.LastInputDown = this.InputDown;
+    this.LastInputRight = this.InputRight;
+    this.LastInputLeft = this.InputLeft;
     
     // Apply a force to move the player in the direction the client intended.
-    this.RigidBody.ApplyForce(movement);
+    if (movement == Real3.Zero)
+      return;
+    
+    var scale = this.Server_MovementScalar;
+    var segment = Segment(this.Transform.WorldTranslation, this.Transform.WorldTranslation + movement * 1.5);
+    
+    var results = this.Space.PhysicsSpace.CastSegment(segment, 100);
+    foreach (var result in results)
+    {
+      if (result.ObjectHit == this.Owner)
+        continue;
+      
+      scale = this.Server_WallMovementScalar;
+      movement = -movement;
+      break;
+    }
+    
+    var swordCog = this.Owner.FindChildByName("Sword");
+    
+    if (Math.Abs(movement) == Real3.XAxis)
+      swordCog.Transform.LocalRotation = Math.AxisAngle(Real3.ZAxis, Math.Pi / 2);
+    else
+      swordCog.Transform.LocalRotation = Quaternion.Identity;
+    
+    var seq = Action.Sequence(this.Owner.Actions);
+    Action.Property(seq, @swordCog.Transform.LocalTranslation, movement, this.Server_SwordTime / 2.0, Ease.SinInOut);
+    Action.Property(seq, @swordCog.Transform.LocalTranslation, Real3.Zero, this.Server_SwordTime / 2.0, Ease.SinInOut);
+    this.SwordAction = seq;
+  
+    var currentVelocity = this.RigidBody.Velocity;
+    var projectedVelocity = Math.ProjectOnVector(currentVelocity, movement);
+    if (Math.Dot(projectedVelocity, movement) < 0)
+      projectedVelocity = Real3.Zero;
+    
+    var blendedVelocity = Math.Lerp(currentVelocity, projectedVelocity, 0.3);
+    
+    this.RigidBody.Velocity = blendedVelocity + movement * scale;
   }
   function Server_OnNetChannelIncomingPropertyChanged(event : NetChannelPropertyChange)
   {
