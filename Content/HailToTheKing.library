@@ -1,0 +1,8 @@
+[Version:1]
+ContentLibrary 
+{
+	var Name = "HailToTheKing"
+	var LibraryId = 0x5952e8814061d2a7
+	var SourceControlType = ""
+	var ReadOnly = false
+}
